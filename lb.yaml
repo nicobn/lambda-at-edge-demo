@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Lambda @ Edge demo
+Parameters:
+  Name:
+    Type: String
+    Description: Name of the application
+  BaseDomainName:
+    Type: String
+  DomainName:
+    Type: String
+  VPC:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to create the application into
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet A
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet B
+  TargetGroupA:
+    Type: String
+    Description: Target group for application A
+  TargetGroupB:
+    Type: String
+    Description: Target group for application B
+  TargetGroupC:
+    Type: String
+    Description: Target group for application C
+  TargetGroupD:
+    Type: String
+    Description: Target group for application D
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${Name}"
+      GroupName: !Sub "${Name}"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${Name}"
+      VpcId: !Ref VPC
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: 60
+      Name: !Sub "${Name}"
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref SecurityGroup
+      Subnets:
+        - !Ref SubnetA
+        - !Ref SubnetB
+      Tags:
+        - Key: Name
+          Value: !Sub "${Name}"
+      Type: application
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref HttpsListenerCertificate
+      DefaultActions:
+        - FixedResponseConfig:
+            ContentType: "text/html"
+            MessageBody: "No rules matches"
+            StatusCode: 404
+          Order: 1
+          Type: fixed-response
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+  RuleA:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Order: 1
+          TargetGroupArn: !Ref TargetGroupA
+          Type: forward
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - /a/*
+              - /a
+      ListenerArn: !Ref HttpsListener
+      Priority: 1
+  RuleB:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Order: 1
+          TargetGroupArn: !Ref TargetGroupB
+          Type: forward
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - /b/*
+              - /b
+      ListenerArn: !Ref HttpsListener
+      Priority: 2
+  RuleC:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Order: 1
+          TargetGroupArn: !Ref TargetGroupC
+          Type: forward
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: x-rule-matches
+            Values:
+              - RULE_C1
+              - RULE_C2
+              - RULE_C3
+      ListenerArn: !Ref HttpsListener
+      Priority: 3
+  RuleD:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Order: 1
+          TargetGroupArn: !Ref TargetGroupD
+          Type: forward
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: x-rule-matches
+            Values:
+              - RULE_D1
+              - RULE_D2
+              - RULE_D3
+      ListenerArn: !Ref HttpsListener
+      Priority: 4
+  HttpsListenerCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+  LoadBalancerRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub "${BaseDomainName}."
+      Name: !Sub "${DomainName}."
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+Outputs:
+  LoadBalancerDomainName:
+    Value: !Ref DomainName

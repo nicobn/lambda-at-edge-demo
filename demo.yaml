@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Lambda @ Edge demo
+Parameters:
+  BaseDomainName:
+    Type: String
+    Default: demo.redhead.cloud
+    Description: Domain name to use for the demo
+  LoadBalancerBaseDomainName:
+    Type: String
+    Default: lb.demo.redhead.cloud
+    Description: Load balancer domain name
+  CIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR of the VPC
+  KeyPair:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Key pair
+  CreateHostedZone:
+    Default: true
+    Type: String
+    AllowedValues:
+      - true
+      - false
+Conditions:
+  CreateHostedZone: !Equals [ !Ref CreateHostedZone, "true" ]
+Resources:
+  Network:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        Name: !Sub "${AWS::StackName}-network"
+        CIDR: !Ref CIDR
+      TemplateURL: vpc.yaml
+  AppA:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        Name: !Sub "${AWS::StackName}-app-a"
+        VPC: !GetAtt Network.Outputs.VPCId
+        KeyPair: !Ref KeyPair
+        SubnetA: !GetAtt Network.Outputs.PrivateSubnetA
+        SubnetB: !GetAtt Network.Outputs.PrivateSubnetB
+      TemplateURL: app.yaml
+  AppB:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        Name: !Sub "${AWS::StackName}-app-b"
+        VPC: !GetAtt Network.Outputs.VPCId
+        KeyPair: !Ref KeyPair
+        SubnetA: !GetAtt Network.Outputs.PrivateSubnetA
+        SubnetB: !GetAtt Network.Outputs.PrivateSubnetB
+      TemplateURL: app.yaml
+  AppC:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        Name: !Sub "${AWS::StackName}-app-c"
+        VPC: !GetAtt Network.Outputs.VPCId
+        KeyPair: !Ref KeyPair
+        SubnetA: !GetAtt Network.Outputs.PrivateSubnetA
+        SubnetB: !GetAtt Network.Outputs.PrivateSubnetB
+      TemplateURL: app.yaml
+  AppD:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        Name: !Sub "${AWS::StackName}-app-d"
+        VPC: !GetAtt Network.Outputs.VPCId
+        KeyPair: !Ref KeyPair
+        SubnetA: !GetAtt Network.Outputs.PrivateSubnetA
+        SubnetB: !GetAtt Network.Outputs.PrivateSubnetB
+      TemplateURL: app.yaml
+  LoadBalancer:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        Name: !Sub "${AWS::StackName}-lb"
+        VPC: !GetAtt Network.Outputs.VPCId
+        SubnetA: !GetAtt Network.Outputs.PublicSubnetA
+        SubnetB: !GetAtt Network.Outputs.PublicSubnetB
+        TargetGroupA: !GetAtt AppA.Outputs.TargetGroup
+        TargetGroupB: !GetAtt AppB.Outputs.TargetGroup
+        TargetGroupC: !GetAtt AppC.Outputs.TargetGroup
+        TargetGroupD: !GetAtt AppD.Outputs.TargetGroup
+        BaseDomainName: !Ref BaseDomainName
+        DomainName: !Ref LoadBalancerBaseDomainName
+      TemplateURL: lb.yaml
+  Zone:
+    Condition: CreateHostedZone
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref BaseDomainName
+

@@ -1,0 +1,286 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Lambda @ Edge demo
+Parameters:
+  Name:
+    Type: String
+    Description: Name of the application
+  KeyPair:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Key pair
+  VPC:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to create the application into
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet A
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet B
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${Name}-instance"
+      GroupName: !Sub "${Name}-instance"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/8
+      Tags:
+        - Key: Name
+          Value: !Sub "${Name}-instance"
+      VpcId: !Ref VPC
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Name}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "ec2.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Description: !Sub "Role for ${Name} instances"
+      MaxSessionDuration: 3600
+      Path: "/"
+      Policies:
+        - PolicyName: Main
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "autoscaling:CompleteLifecycleAction"
+                Resource: !Sub "arn:aws:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${Name}"
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${Name}"
+      Path: "/"
+      Roles:
+        - !Ref InstanceRole
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          all:
+            - install
+            - enableModRewrite
+            - enableServices
+            - startServices
+            - installApp
+            - setupCfnHup
+            - enableCfnHup
+        enableModRewrite:
+          files:
+            /etc/httpd/conf.d/rewrite.conf:
+              content: |
+                <Directory /var/www/html>
+                    Options Indexes FollowSymLinks MultiViews
+                    AllowOverride All
+                    Require all granted
+                </Directory>
+              mode: '000400'
+              owner: root
+              group: root
+        enableServices:
+          commands:
+            httpd:
+              command: "/usr/bin/systemctl enable httpd"
+              test: "! /usr/bin/systemctl is-enabled httpd"
+              ignoreErrors: false
+        startServices:
+          commands:
+            httpd:
+              command: "/usr/bin/systemctl start httpd"
+              test: "! /usr/bin/systemctl is-active httpd"
+              ignoreErrors: false
+        install:
+          packages:
+            yum:
+              httpd: []
+              php: []
+              jq: []
+        setupCfnHup:
+          files:
+            '/etc/cfn/cfn-hup.conf':
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+                interval=1
+              mode: '000400'
+              owner: root
+              group: root
+            '/etc/cfn/hooks.d/cfn-auto-reloader.conf':
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.AppLaunchTemplate.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack '${AWS::StackName}' --region '${AWS::Region}' --resource AppLaunchTemplate --configsets all
+                runas=root
+              mode: '000400'
+              owner: root
+              group: root
+        enableCfnHup:
+          commands:
+            enableService:
+              command: "/usr/bin/systemctl enable cfn-hup"
+              test: "! /usr/bin/systemctl is-enabled cfn-hup"
+              ignoreErrors: false
+            startService:
+              command: "/usr/bin/systemctl start cfn-hup"
+              test: "! /usr/bin/systemctl is-active cfn-hup"
+              ignoreErrors: false
+        installApp:
+          files:
+            /var/www/html/index.php:
+              content: !Sub |
+                <table border="1">
+                <tr><th>Key</th><th>Value</th></tr>
+                <tr><td>Request URI</td><td><?php echo $_SERVER['REQUEST_URI']; ?></td></tr>
+                <tr><td>Time</td><td><?php echo time(); ?></td></tr>
+                <tr><td>Server</td><td><?php echo gethostname(); ?></td></tr>
+                <tr><td>App</td><td>${Name}</td></tr>
+                <tr><td>Headers</td><td>
+                <table>
+                <tr><th>Key</th><th>Value</th></tr>
+                <?php
+                    $headers = getallheaders();
+                    foreach ($headers as $key => $value) {
+                        echo "<tr><td>$key</td><td>$value</td></tr>";
+                    }
+                ?></table></td></tr>
+                </table>
+              mode: "000644"
+              owner: "apache"
+              group: "apache"
+            '/var/www/html/.htaccess':
+              content: !Sub |
+                <IfModule mod_rewrite.c>
+                RewriteEngine On
+                RewriteBase /
+                RewriteRule ^index\.php$ - [L]
+                RewriteCond %{REQUEST_FILENAME} !-f
+                RewriteCond %{REQUEST_FILENAME} !-d
+                RewriteRule . /index.php [L]
+                </IfModule>
+              mode: "000644"
+              owner: "apache"
+              group: "apache"
+    Properties:
+      LaunchTemplateName: !Sub "${Name}"
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Name: !Ref InstanceProfile
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: False
+            DeleteOnTermination: True
+            DeviceIndex: 0
+            Groups:
+              - !Ref SecurityGroup
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${Name}"
+        BlockDeviceMappings:
+          - DeviceName: "/dev/sda1"
+            Ebs:
+              VolumeSize: "10"
+              VolumeType: "gp2"
+        EbsOptimized: False
+        ImageId: ami-04b762b4289fba92b
+        InstanceType: t3.nano
+        KeyName: !Ref KeyPair
+        UserData: !Base64
+          Fn::Sub: |
+            #!/bin/bash
+
+            /usr/bin/yum update -y
+
+            /opt/aws/bin/cfn-init -v --stack '${AWS::StackName}' \
+              --resource AppLaunchTemplate \
+              --configsets all \
+              --region '${AWS::Region}'
+
+            if [[ "$?" == "0" ]]; then
+              echo "Successful initialization, completing lifecycle hook"
+              result="CONTINUE"
+            else
+              echo >&2 "Unsuccessful initialization"
+              result="ABANDON"
+            fi
+
+            /usr/bin/aws autoscaling complete-lifecycle-action \
+              --lifecycle-hook-name initialization-hook \
+              --auto-scaling-group-name '${Name}' \
+              --lifecycle-action-result "${!result}" \
+              --instance-id "$(ec2-metadata -i | awk '{print $2}')" \
+              --region '${AWS::Region}'
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${Name}"
+      Cooldown: 60
+      MinSize: 2
+      MaxSize: 2
+      HealthCheckGracePeriod: 60
+      HealthCheckType: EC2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      LifecycleHookSpecificationList:
+        - DefaultResult: ABANDON
+          HeartbeatTimeout: 300
+          LifecycleHookName: initialization-hook
+          LifecycleTransition: 'autoscaling:EC2_INSTANCE_LAUNCHING'
+      MetricsCollection:
+        - Granularity: 1Minute
+      Tags:
+        - Key: Name
+          Value: !Sub "${Name}"
+          PropagateAtLaunch: True
+      TerminationPolicies:
+        - OldestLaunchTemplate
+        - Default
+      VPCZoneIdentifier:
+        - !Ref SubnetA
+        - !Ref SubnetB
+      TargetGroupARNs:
+        - !Ref TargetGroup
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${Name}"
+      HealthCheckEnabled: True
+      HealthCheckIntervalSeconds: 60
+      HealthCheckPath: "/"
+      HealthCheckPort: 80
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 2
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+      Port: 80
+      Protocol: HTTP
+      Tags:
+        - Key: Name
+          Value: !Sub "${Name}"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 300
+        - Key: slow_start.duration_seconds
+          Value: 30
+      TargetType: instance
+      VpcId: !Ref VPC
+Outputs:
+  TargetGroup:
+    Value: !Ref TargetGroup
