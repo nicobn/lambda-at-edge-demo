@@ -35,7 +35,6 @@ Resources:
       FunctionName: !Sub "${AWS::StackName}-viewer-requests"
       Handler: "viewer-requests.handler"
       MemorySize: 128
-      ReservedConcurrentExecutions: 500
       Runtime: python3.7
       Timeout: 1
       Role: !GetAtt ViewerRequestFunctionRole.Arn
